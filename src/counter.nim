@@ -5,7 +5,7 @@ import abstract_rcu
 from util import dbg, repeat_until
 
 type
-  Counter = ref object
+  Counter* = ref object
     value: Atomic[ ptr int ]
 
 proc CAS(
@@ -15,7 +15,7 @@ proc CAS(
 ): bool =
   location.compareExchange( expected, desired, moAcquire, moRelease )
 
-proc read( counter: var Counter ): int =
+proc read*( counter: var Counter ): int =
   counter.value.load( moRelaxed )[]
 
 #[ Figure.3, page-7, right, Counter
@@ -36,7 +36,7 @@ proc read( counter: var Counter ): int =
     return v;
   }
 ]#
-proc inc( counter: var Counter ): int =
+proc inc*( counter: var Counter ): int =
 
   var new_int_ptr = createShared( int, sizeof( int ) )
 
@@ -52,6 +52,7 @@ proc inc( counter: var Counter ): int =
   repeat_until CAS( counter.value, old_int_ptr, new_int_ptr ):
     rcu_exit()
     rcu_enter()
+    # TODO: CAS should update the location. on failure - maybe not needed ?
     old_int_ptr = counter.value.load moAcquire
     new_int_ptr[] = old_int_ptr[] + 1
 
@@ -114,12 +115,11 @@ proc thr_worker() {.gcsafe.}  =
     else:
       continue
 
+  dbg &"{ rcu_info() }-worker-thread exits.."
 
-  #dbg &"{ rcu_info() }-worker-thread exits.."
-
-  # flush anything leftover in the detached-Set
+  # TODO: flush anything leftover in the detached-Set
   # could be done in rcu_unregister ?
-  #rcu_unregister() # unregister thread
+  rcu_unregister() # unregister thread
 
 
 proc now(): int64 = getMonoTime().ticks()
@@ -130,7 +130,7 @@ proc main =
 
   var ths: array[ 3, Thread[ void ] ]
 
-  dbg "main-thread id is ", getThreadId()
+  dbg "main-thread id : ", getThreadId()
 
   for i in 0 .. 2:
     createThread ths[i], thr_worker
@@ -143,6 +143,7 @@ proc main =
   thrs_work.store off
   dbg &"{rcu_info()}-main::stopping threads now +{now() - ts}"
 
+  # TODO: take care of detached-set
   # rcu_reclaim()   # free detached-pointers, if any ?
   rcu_unregister()
   sleep 1000
