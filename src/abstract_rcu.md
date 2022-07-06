@@ -18,9 +18,9 @@ Changes and limitations to the Pseudo-/C-code
   - a not formerly registered thread tries to participate.
 - added procedures for logging purposes:
   - `rcu_info(): string` returns array-slot-number and OS-thread-id.
-  - `rcu_init( ch: ptr Channel[ Rec ] )` passes a log-channel.
+  - `rcu_init( ch: ptr Channel[ Rec ], start: int64 )` passes a log-channel and starttime in ticks.
   - `rcu_id(): int` returns the threads array-slot-number.
 - added a Thread-Array `TArray`-struct :
   - it is fixed-sized `N=4`. So at most four threads can participate.
   - keeps the thread's id from the operating-system in member `TArray.os_id`.
-  - keeps the `rcu[N]`-array-of-bool in member `TArray.slots`.
+  - keeps the registered threads from `rcu[N]`-array-of-bool in member `TArray.slots`.

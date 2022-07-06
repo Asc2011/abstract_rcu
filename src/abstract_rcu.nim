@@ -26,7 +26,7 @@ proc os_thread_id(): int = getThreadId()
 # per-thread-Seq keeping detached-pointers around for deferred/later reclamation.
 # Needs initialization at the start of any worker-thread-function.
 #
-var detached* {.threadvar.}: seq[ptr int]
+var detached_ptrs* {.threadvar.}: seq[ptr int]
 
 type TArray = object
   #
@@ -158,16 +158,26 @@ proc rcu_reclaim( old_int_ptr: ptr int) =
 
   # stores a detached-pointer in the thread-local Set 'detached' for later reclamation.
   #
-  detached.add old_int_ptr
+  detached_ptrs.add old_int_ptr
 
-  dbg &"thread-{rcu_info()} detached pointer: { old_int_ptr.repr }"
+  #dbg &"thread-{rcu_info()} detached pointer: { old_int_ptr.repr }"
+  log[].send Rec(
+    tics:   now() - appstart,
+    who:    rcu_id(),
+    where:  "rcu_reclaim",
+    what:   "ptr",
+    detail: &"{cast[uint64](old_int_ptr)}"
+  )
   #
   # ?? if nondet(): return ?? unclear..
   # TODO: some random condition
   #
   rcu_synchronize()
-  while detached.len > 0:
-    freeShared[int]( detached.pop )
+  while detached_ptrs.len > 0:
+    let old_ptr = detached_ptrs.pop()
+    dbg &"thread-{rcu_info()} detached pointer: { old_ptr.repr }"
+
+    #freeShared[int]( detached.pop )
 
 #[
 template critical_section*( code: untyped ) =
