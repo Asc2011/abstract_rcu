@@ -1,6 +1,6 @@
 import std / [ atomics, sets, strformat, monotimes ]
 
-from util import dbg, Rec, now
+from util import dbg, Rec, now, repeat_until
 #[
   This is strictly a proof-of-concept and not intended for other purposes than
   exploring and understanding the concept behind Read-Copy-Update (RCU).
@@ -115,6 +115,8 @@ proc rcu_synchronize() =
   #
   # lockfree synchronization
   #
+  let start_t = now()
+
   var registered: array[ 4, bool ]
   for idx in 0 .. 3:
     registered[ idx ] = thread_arr.slots[ idx ]
@@ -129,8 +131,9 @@ proc rcu_synchronize() =
   )
   for idx in 0 .. 3:
     if registered[ idx ]:
-      let ts = now()
-      while thread_arr.slots[ idx ] == true:
+      let start_t = now()
+      repeat_until thread_arr.slots[ idx ] == false:
+      #while thread_arr.slots[ idx ] == true:
         discard
       #dbg &"<- {idx}-thread left synchronize after {now()-offset}"
       log[].send Rec(
@@ -138,8 +141,18 @@ proc rcu_synchronize() =
         who:    idx,
         where:  "rcu_synchronize",
         what:   "left",
-        detail: &"after {now()-ts}"
+        detail: &"after {now()-start_t}"
       )
+  # eo for-loop idx
+
+  log[].send Rec(
+    tics:   now() - appstart,
+    who:    rcu_id(),
+    where:  "rcu_synchronize",
+    what:   "exit",
+    detail: &"after {now()-start_t}"
+  )
+  # eo rcu-synchronize
 
 #[ Figure.2, left-side
   int *C = new int(0);
@@ -174,7 +187,10 @@ proc rcu_reclaim( old_int_ptr: ptr int) =
   #
   rcu_synchronize()
 
-  while detached_ptrs.len > 0:
+
+  #while detached_ptrs.len > 0:
+  repeat_until detached_ptrs.len == 0:
+
     let old_ptr = detached_ptrs.pop()
     #dbg &"thread-{rcu_info()} free pointer: { old_ptr.repr }"
     log[].send Rec(
@@ -185,6 +201,16 @@ proc rcu_reclaim( old_int_ptr: ptr int) =
       detail: &"{old_ptr.repr}"
     )
     #free[int]( detached.pop )
+
+  # eo-while-loop
+
+  # log[].send Rec(
+  #   tics:   now() - appstart,
+  #   who:    rcu_id(),
+  #   where:  "rcu_reclaim",
+  #   what:   "exit",
+  #   detail: &"{old_ptr.repr}"
+  # )
 
 #[
 template critical_section*( code: untyped ) =

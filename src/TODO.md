@@ -1,4 +1,4 @@
-### Abstract RCU
+## Abstract RCU
 
   1. [ ] find and use a memory-region where threads can concurrently operate on a data-structure.
 
@@ -7,11 +7,11 @@
 
 ### Planned lockfree data-Structures
 
-  - [x] A Dummy to test the setup.
+  - [x] A Dummy to test the setup in [`./test_dummy.nim`](test_dummy.nim)
 
 #### Counter
 
-  - [ ] as provided in the Document. WIP needs working RCU 1,2
+  - [ ] as described in [Figure.3](./ds_rcu/counter.md). WIP needs a working abstract RCU. see above 1,2
 
 #### List-type ( Linked-List )
 

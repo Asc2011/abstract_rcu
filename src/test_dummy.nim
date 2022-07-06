@@ -9,12 +9,12 @@ var threads_work: Atomic[ bool ]
 threads_work.store on
 
 # sends a pointer to every worker-thread
-var chan: Channel[ ptr seq[int] ]
-chan.open()
+var thr_chan: Channel[ ptr seq[int] ]
+thr_chan.open()
 
 # log-channel
-var lchan: Channel[ Rec ]
-lchan.open()
+var log_chan: Channel[ Rec ]
+log_chan.open()
 
 var global_list = @[1,2,3,4,5]
 var appstart = now()
@@ -35,10 +35,10 @@ proc thr_worker() {.gcsafe.}  =
 
   rcu_register()  # register thread with RCU
   let rcu_slot = rcu_id()
-  var list_ptr = chan.recv()
+  var list_ptr = thr_chan.recv()
 
   proc log( what: string, detail: string = "" ) =
-    lchan.send Rec(
+    log_chan.send Rec(
       tics:   now() - appstart,
       who:    rcu_slot,
       where:  "thread-fn",
@@ -70,7 +70,7 @@ proc thr_worker() {.gcsafe.}  =
     rcu_exit() # announce end of 'critical-section'
 
     if OP in @[ "pop", "delay" ]:
-      rcu_reclaim detached_ptr  # recyle/free in rcu_reclaim
+      rcu_reclaim detached_ptr  # recycle/free pointer
 
   # end-of while-loop
   #
@@ -80,60 +80,70 @@ proc thr_worker() {.gcsafe.}  =
       garbage.add cast[uint64]( p )
     log( "error", &"{garbage}" )
 
-  log( "quit", &"{list_ptr[]} {detached_ptrs.len}" )
-
+  log( "exit", &"{list_ptr[]} {detached_ptrs.len}" )
   rcu_unregister() # unregister thread
 
 
 proc main =
-
+  #
+  # keeps the log-records of the session.
   var msgs: seq[Rec]
+  #
   msgs.add Rec(
     tics:    now() - appstart,
     who:     0,
-    where:   "test_dummy",
+    where:   "test_dummy.nim",
     what:    "init"
   )
-  rcu_init lchan.addr, appstart
+  rcu_init log_chan.addr, appstart
+
   rcu_register()
 
   var ths: array[ 3, Thread[void] ]
 
   for i in 0 .. 2:
     createThread ths[i], thr_worker
-    chan.send global_list.addr
+    thr_chan.send global_list.addr
     #spawn thr_worker
 
   let ts = 1_000_000'i64 + now()
   while ts > now():
-    let pkt = lchan.tryRecv()
+    let pkt = log_chan.tryRecv()
     if pkt.dataAvailable:
       msgs.add pkt.msg
 
-  chan.close()
+  thr_chan.close()
+
+  threads_work.store off
 
   msgs.add Rec(
     tics:     now() - appstart,
     who:      0,
     where:    "main-fn",
-    what:     "prepare quit"
+    what:     "prepare join",
+    detail:   "cleared 'threads_work'-condition."
   )
-  threads_work.store off
+  #
   joinThreads ths
-
+  #
+  msgs.add Rec(
+    tics:     now() - appstart,
+    who:      0,
+    where:    "main-fn",
+    what:     "joined",
+    detail:   "all 'thr_worker' have stopped."
+  )
   # TODO: take care of Set-detached_ptrs ?
   rcu_unregister()
 
-  # for i in 0 .. 2:
-  #   #dbg &"thread-{i} running ? { ths[i].running }"
-  #   doAssert( not ths[i].running )
+  for i in 0..2: doAssert( not ths[i].running )
 
   while true:
-    let pkt = lchan.tryRecv()
+    let pkt = log_chan.tryRecv()
     if pkt.dataAvailable:
       msgs.add pkt.msg
     else:
-      lchan.close()
+      log_chan.close()
       break
 
   msgs.add Rec(
@@ -149,26 +159,40 @@ proc main =
 
   # termintable-API
   # https://xmonader.github.io/nim-terminaltables/api/terminaltables.html
-  
-  let tt = newUnicodeTable()
-  tt.separateRows = true
-  tt.setHeaders @[
+  #
+  let table = newUnicodeTable()
+  table.separateRows = true
+  table.setHeaders @[
     newCell "#" ,
-    newCell "tics" ,
+    newCell "app/ns" ,
+    newCell "delta/ns" ,
     newCell "who" ,
     newCell "where" ,
     newCell "what" ,
     newCell "detail"
   ]
 
-  let start_t = msgs[0].tics
-  var diff_t = 0
+  var pred: int64 = msgs[0].tics
   for i,m in msgs:
+
     let who = if m.who == 0: "main" else: &"worker-{m.who}"
 
-    tt.addRow @[ &"{i}", &"+{m.tics-diff_t}", who, m.where, m.what, m.detail ]
+    let delta_t = m.tics - pred
+    pred = m.tics
 
-  tt.printTable
+    let app_t = m.tics
+
+    table.addRow @[
+      &"{  i }",
+      &"{  app_t }",
+      &"+{ delta_t }",
+      who,
+      m.where,
+      m.what,
+      m.detail
+    ]
+
+  table.printTable
   #for m in msgs: dbg m
 
 when isMainModule:
