@@ -1,67 +1,8 @@
-
 import std / [ atomics, monotimes, os, random, sets, strformat, threadpool ]
 
 import abstract_rcu
-from util import dbg, repeat_until
-
-type
-  Counter* = ref object
-    value: Atomic[ ptr int ]
-
-proc CAS(
-    location: var Atomic[ptr int],
-    expected: var ptr int,
-    desired:  var ptr int
-): bool =
-  location.compareExchange( expected, desired, moAcquire, moRelease )
-
-proc read*( counter: var Counter ): int =
-  counter.value.load( moRelaxed )[]
-
-#[ Figure.3, page-7, right, Counter
-
-  int inc() {
-    int v, *n, *s;
-    n = new int; rcu_enter();
-    do {
-      rcu_exit();
-      rcu_enter();
-      s = C;
-      v = *s;
-      *n = v+1;
-    } while ( !CAS(&C,s,n) );
-
-    rcu_exit();
-    reclaim(s);
-    return v;
-  }
-]#
-proc inc*( counter: var Counter ): int =
-
-  var new_int_ptr = createShared( int, sizeof( int ) )
-
-  dbg &"new_int_ptr : { new_int_ptr.repr } | value = { new_int_ptr[] }"
-
-  rcu_enter()
-
-  var old_int_ptr = counter.value.load moAcquire
-  #dbg "old_int_ptr : { old_int_ptr.repr }"
-  new_int_ptr[] = old_int_ptr[] + 1
-  #dbg &"new_int_ptr : { new_int_ptr.repr } | value = { new_int_ptr[] }"
-
-  repeat_until CAS( counter.value, old_int_ptr, new_int_ptr ):
-    rcu_exit()
-    rcu_enter()
-    # TODO: CAS should update the location. on failure - maybe not needed ?
-    old_int_ptr = counter.value.load moAcquire
-    new_int_ptr[] = old_int_ptr[] + 1
-
-  rcu_exit()
-  rcu_reclaim old_int_ptr
-
-  return counter.read()
-
-
+import ds_counter
+from util import dbg
 
 
 #var counter = createShared( Counter, sizeof( Counter ) )[]
@@ -73,28 +14,29 @@ dbg repr c_ptr
 var counter = cast[Counter]( c_ptr )
 dbg counter.repr
 
-var thrs_work: Atomic[ bool ]
-thrs_work.store on
 
 
+
+var threads_work: Atomic[ bool ]
+threads_work.store on
 #
 # Any worker might perform reads or writes.
 #
 proc thr_worker() {.gcsafe.}  =
 
-  # thread-local set for detached int-pointers
+  # thread-local seq[ptr int] for detached int-pointers
   #
   detached = newSeq[ptr int]()
 
   rcu_register()  # register thread with RCU
 
-  while thrs_work.load:
+  while threads_work.load:
 
     rcu_enter() # announce start of the 'critical-section'
 
     dbg "thread sees counter ? ", counter.repr
 
-    let OP = random.sample @[ "inc", "dec", "read", "reset", "noop" ]
+    let OP = random.sample @[ "inc", "dec", "read", "reset", "" ]
     case OP:
       of "inc":
         discard counter.inc()

@@ -16,7 +16,10 @@ Changes and limitations to the Pseudo-/C-code
 - will break with runtime-error, in case :
   - more than four threads attempts to register.
   - a not formerly registered thread tries to participate.
-- added `rcu_info`-procedure for logging.
+- added procedures for logging purposes:
+  - `rcu_info(): string` returns array-slot-number and OS-thread-id.
+  - `rcu_init( ch: ptr Channel[ Rec ] )` passes a log-channel.
+  - `rcu_id(): int` returns the threads array-slot-number.
 - added a Thread-Array `TArray`-struct :
   - it is fixed-sized `N=4`. So at most four threads can participate.
   - keeps the thread's id from the operating-system in member `TArray.os_id`.

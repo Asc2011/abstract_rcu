@@ -1,6 +1,6 @@
-import std / [ atomics, strformat ]
+import std / [ atomics, strformat, monotimes ]
 
-from util import dbg
+from util import dbg, Rec, now
 #[
   This is strictly a proof-of-concept and not intended for other purposes than
   exploring and understanding the concept behind Read-Copy-Update (RCU).
@@ -9,19 +9,21 @@ from util import dbg
   grows into a workbench for concurrent data-structures.
   Try this [Userspace-RCU]( http://liburcu.org ) library for real purposes.
 ]#
-proc rcu_register*()    # every threads must register with RCU on thread-creation.
-proc rcu_unregister*()  # every thread should deregister before thread destruction.
-proc rcu_enter*()       # signal the begin of a critical-section.
-proc rcu_exit*()        # signal the end of a critical-section.
+
+proc rcu_init*( ch: ptr Channel[util.Rec], start: int64 ) # recieves a pointer to a log-channel and the starttime in ticks
+
+proc rcu_register*()    # threads must register with RCU on thread-creation.
+proc rcu_unregister*()  # threads should unregister before thread destruction.
+proc rcu_enter*()       # marks the begin of a 'critical-section'.
+proc rcu_exit*()        # marks the end of a 'critical-section'.
 proc rcu_synchronize*() # synchronize with other threads. Starts of 'grace-period'.
 
 proc rcu_reclaim*( old_int_ptr: ptr int ) # takes a detached pointer for later disposal.
-proc rcu_info(): string # returns the threads-id and index in the thread-array.
-
+proc rcu_info*(): string # returns the threads-id and index in the thread-array.
 
 proc os_thread_id(): int = getThreadId()
 
-# Set for detached-pointers for deferred/later reclamation.
+# per-thread-Seq keeping detached-pointers around for deferred/later reclamation.
 # Needs initialization at the start of any worker-thread-function.
 #
 var detached* {.threadvar.}: seq[ptr int]
@@ -86,19 +88,26 @@ proc set( ta: var TArray ) =
   ta.slots[ idx ] = true
 
 
-# the global thread-array
+# the thread-array
 #
 var thread_arr = TArray()
+var log: ptr Channel[util.Rec]
+var appstart: int64
 
-proc rcu_register()    = thread_arr.add()
-proc rcu_enter()       = thread_arr.set()
-proc rcu_exit()        = thread_arr.unset()
-proc rcu_unregister()  =
+proc rcu_init*( ch: ptr Channel[util.Rec], start: int64 ) =
+  log = ch
+  appstart = start
+proc rcu_register    = thread_arr.add()
+proc rcu_enter       = thread_arr.set()
+proc rcu_exit        = thread_arr.unset()
+proc rcu_unregister  =
   # TODO: test if clean-up/flush of detached-pointers
   # has to be done.
   thread_arr.rem()
 
-proc rcu_info(): string =
+proc rcu_id*(): int = thread_arr.slot()
+
+proc rcu_info: string =
   let slot = thread_arr.slot()
   result = &"os-id: { thread_arr.os_id[ slot ] }, slot: {slot}"
 
@@ -106,18 +115,31 @@ proc rcu_synchronize() =
   #
   # lockfree synchronization
   #
-  dbg "synchronize -> ", thread_arr.slots
-
   var registered: array[ 4, bool ]
   for idx in 0 .. 3:
     registered[ idx ] = thread_arr.slots[ idx ]
 
+  # dbg &"synchronize -> {thread_arr.slots}"
+  log[].send Rec(
+    tics:   now() - appstart,
+    who:    rcu_id(),
+    where:  "rcu_synchronize",
+    what:   "enter",
+    detail: &"{thread_arr.slots} | {registered}"
+  )
   for idx in 0 .. 3:
-    if registered[ idx ] == true:
-
+    if registered[ idx ]:
+      let offset = now()
       while thread_arr.slots[ idx ] == true:
         discard
-      # dbg &"<- {idx}-thread leaves synchronize"
+      #dbg &"<- {idx}-thread left synchronize after {now()-offset}"
+      log[].send Rec(
+        tics:   now() - appstart,
+        who:    idx,
+        where:  "rcu_synchronize",
+        what:   "left",
+        detail: &"after {now()-offset}"
+      )
 
 #[ Figure.2, left-side
   int *C = new int(0);
@@ -136,7 +158,7 @@ proc rcu_reclaim( old_int_ptr: ptr int) =
 
   # stores a detached-pointer in the thread-local Set 'detached' for later reclamation.
   #
-  detached.add( old_int_ptr )
+  detached.add old_int_ptr
 
   dbg &"thread-{rcu_info()} detached pointer: { old_int_ptr.repr }"
   #
@@ -147,9 +169,7 @@ proc rcu_reclaim( old_int_ptr: ptr int) =
   while detached.len > 0:
     freeShared[int]( detached.pop )
 
-
 #[
-
 template critical_section*( code: untyped ) =
 
   rcu_enter()
