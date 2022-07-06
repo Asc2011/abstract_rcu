@@ -1,5 +1,6 @@
 import std / [ algorithm, atomics, monotimes, os, random, sets, strformat, threadpool ]
 randomize()
+import terminaltables
 
 import abstract_rcu
 from util import dbg, Rec, now
@@ -27,9 +28,9 @@ proc thr_worker() {.gcsafe.}  =
 
   randomize()
 
-  # thread-local seq[ptr int] for detached int-pointers
+  # thread-local Set[ptr int] for detached pointers of int
   #
-  detached_ptrs = newSeq[ptr int]()
+  detached_ptrs = initHashSet[ptr int]()
   var detached_ptr: ptr int
 
   rcu_register()  # register thread with RCU
@@ -40,7 +41,7 @@ proc thr_worker() {.gcsafe.}  =
     lchan.send Rec(
       tics:   now() - appstart,
       who:    rcu_slot,
-      where:  "worker",
+      where:  "thread-fn",
       what:   what,
       detail: detail
     )
@@ -80,14 +81,19 @@ proc thr_worker() {.gcsafe.}  =
     log( "error", &"{garbage}" )
 
   log( "quit", &"{list_ptr[]} {detached_ptrs.len}" )
-  #
+
   rcu_unregister() # unregister thread
 
 
 proc main =
 
   var msgs: seq[Rec]
-
+  msgs.add Rec(
+    tics:    now() - appstart,
+    who:     0,
+    where:   "test_dummy",
+    what:    "init"
+  )
   rcu_init lchan.addr, appstart
   rcu_register()
 
@@ -98,29 +104,29 @@ proc main =
     chan.send global_list.addr
     #spawn thr_worker
 
-  let ts = 500_000'i64 + now()
+  let ts = 1_000_000'i64 + now()
   while ts > now():
     let pkt = lchan.tryRecv()
     if pkt.dataAvailable:
       msgs.add pkt.msg
 
   chan.close()
+
   msgs.add Rec(
     tics:     now() - appstart,
     who:      0,
-    where:    "main",
-    what:     "terminating worker"
+    where:    "main-fn",
+    what:     "prepare quit"
   )
   threads_work.store off
   joinThreads ths
 
-  # TODO: take care of detached-set
-  # rcu_reclaim()
+  # TODO: take care of Set-detached_ptrs ?
   rcu_unregister()
 
-  for i in 0 .. 2:
-    dbg &"thread-{i} running ? { ths[i].running }"
-    doAssert( not ths[i].running )
+  # for i in 0 .. 2:
+  #   #dbg &"thread-{i} running ? { ths[i].running }"
+  #   doAssert( not ths[i].running )
 
   while true:
     let pkt = lchan.tryRecv()
@@ -133,16 +139,37 @@ proc main =
   msgs.add Rec(
     tics:    now() - appstart,
     who:     0,
-    where:   "main",
-    what:    "quit",
+    where:   "main-fn",
+    what:    "shutdown",
     detail:  &"{global_list} {detached_ptrs.len}"
   )
 
-  dbg &"got {msgs.len} x msgs."
   sort(msgs) do (x, y: Rec) -> int:
     cmp( x.tics, y.tics )
 
-  for msg in msgs: dbg msg
+  # termintable-API
+  # https://xmonader.github.io/nim-terminaltables/api/terminaltables.html
+  
+  let tt = newUnicodeTable()
+  tt.separateRows = true
+  tt.setHeaders @[
+    newCell "#" ,
+    newCell "tics" ,
+    newCell "who" ,
+    newCell "where" ,
+    newCell "what" ,
+    newCell "detail"
+  ]
+
+  let start_t = msgs[0].tics
+  var diff_t = 0
+  for i,m in msgs:
+    let who = if m.who == 0: "main" else: &"worker-{m.who}"
+
+    tt.addRow @[ &"{i}", &"+{m.tics-diff_t}", who, m.where, m.what, m.detail ]
+
+  tt.printTable
+  #for m in msgs: dbg m
 
 when isMainModule:
   main()

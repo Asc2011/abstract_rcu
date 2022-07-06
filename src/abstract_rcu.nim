@@ -1,4 +1,4 @@
-import std / [ atomics, strformat, monotimes ]
+import std / [ atomics, sets, strformat, monotimes ]
 
 from util import dbg, Rec, now
 #[
@@ -26,7 +26,7 @@ proc os_thread_id(): int = getThreadId()
 # per-thread-Seq keeping detached-pointers around for deferred/later reclamation.
 # Needs initialization at the start of any worker-thread-function.
 #
-var detached_ptrs* {.threadvar.}: seq[ptr int]
+var detached_ptrs* {.threadvar.}: HashSet[ptr int]
 
 type TArray = object
   #
@@ -129,7 +129,7 @@ proc rcu_synchronize() =
   )
   for idx in 0 .. 3:
     if registered[ idx ]:
-      let offset = now()
+      let ts = now()
       while thread_arr.slots[ idx ] == true:
         discard
       #dbg &"<- {idx}-thread left synchronize after {now()-offset}"
@@ -138,7 +138,7 @@ proc rcu_synchronize() =
         who:    idx,
         where:  "rcu_synchronize",
         what:   "left",
-        detail: &"after {now()-offset}"
+        detail: &"after {now()-ts}"
       )
 
 #[ Figure.2, left-side
@@ -156,28 +156,35 @@ proc rcu_synchronize() =
 ]#
 proc rcu_reclaim( old_int_ptr: ptr int) =
 
-  # stores a detached-pointer in the thread-local Set 'detached' for later reclamation.
+  # stores a detached-pointer in the thread-local Set 'detached_ptrs' for later reclamation.
   #
-  detached_ptrs.add old_int_ptr
+  detached_ptrs.incl old_int_ptr
 
   #dbg &"thread-{rcu_info()} detached pointer: { old_int_ptr.repr }"
   log[].send Rec(
     tics:   now() - appstart,
     who:    rcu_id(),
     where:  "rcu_reclaim",
-    what:   "ptr",
-    detail: &"{cast[uint64](old_int_ptr)}"
+    what:   "pointer",
+    detail: &"{old_int_ptr.repr}"
   )
   #
   # ?? if nondet(): return ?? unclear..
   # TODO: some random condition
   #
   rcu_synchronize()
+
   while detached_ptrs.len > 0:
     let old_ptr = detached_ptrs.pop()
-    dbg &"thread-{rcu_info()} detached pointer: { old_ptr.repr }"
-
-    #freeShared[int]( detached.pop )
+    #dbg &"thread-{rcu_info()} free pointer: { old_ptr.repr }"
+    log[].send Rec(
+      tics:   now() - appstart,
+      who:    rcu_id(),
+      where:  "rcu_reclaim",
+      what:   "free pointer",
+      detail: &"{old_ptr.repr}"
+    )
+    #free[int]( detached.pop )
 
 #[
 template critical_section*( code: untyped ) =

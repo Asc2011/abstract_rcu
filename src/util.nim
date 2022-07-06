@@ -1,7 +1,7 @@
 import std/monotimes
-proc now*(): int64 = getMonoTime().ticks
-
 from std/macros import unpackVarargs
+
+proc now*(): int64 = getMonoTime().ticks
 
 template repeat_until*( cond: bool, code: untyped ) =
   while not cond:

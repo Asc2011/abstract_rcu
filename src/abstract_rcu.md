@@ -12,6 +12,7 @@ Changes and limitations to the Pseudo-/C-code
 - renamed:
   - procedure `sync` to `rcu_synchronize`.
   - the `r`-array-of-bool to `registered` from procedure-`sync` resp. `rcu_synchronize`.
+  - the Set-of-detached-pointers from `detached` to `detached_ptrs`
 - added `rcu_register`/`rcu_unregister`-procedures to register threads wanting to participate in RCU.
 - will break with runtime-error, in case :
   - more than four threads attempts to register.
