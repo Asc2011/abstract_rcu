@@ -1,4 +1,4 @@
-import std / [ atomics, sets, strformat, monotimes ]
+import std / [ atomics, sets, strformat ]
 
 from util import dbg, Rec, now, repeat_until
 #[
@@ -10,7 +10,7 @@ from util import dbg, Rec, now, repeat_until
   Try this [Userspace-RCU]( http://liburcu.org ) library for real purposes.
 ]#
 
-proc rcu_init*( ch: ptr Channel[util.Rec], start: int64 ) # recieves a pointer to a log-channel and the starttime in ticks
+proc rcu_init*( ch: ptr Channel[util.Rec], start: int64 ) # receives a pointer to a log-channel and the starttime in ticks.
 
 proc rcu_register*()    # threads must register with RCU on thread-creation.
 proc rcu_unregister*()  # threads should unregister before thread destruction.
@@ -88,7 +88,7 @@ proc set( ta: var TArray ) =
   ta.slots[ idx ] = true
 
 
-# the thread-array
+# the rcu-thread-array
 #
 var thread_arr = TArray()
 var log: ptr Channel[util.Rec]
@@ -100,10 +100,7 @@ proc rcu_init*( ch: ptr Channel[util.Rec], start: int64 ) =
 proc rcu_register    = thread_arr.add()
 proc rcu_enter       = thread_arr.set()
 proc rcu_exit        = thread_arr.unset()
-proc rcu_unregister  =
-  # TODO: test if clean-up/flush of detached-pointers
-  # has to be done.
-  thread_arr.rem()
+proc rcu_unregister  = thread_arr.rem()
 
 proc rcu_id*(): int = thread_arr.slot()
 
@@ -121,27 +118,27 @@ proc rcu_synchronize() =
   for idx in 0 .. 3:
     registered[ idx ] = thread_arr.slots[ idx ]
 
-  # dbg &"synchronize -> {thread_arr.slots}"
   log[].send Rec(
     tics:   now() - appstart,
     who:    rcu_id(),
     where:  "rcu_synchronize",
     what:   "enter",
-    detail: &"{thread_arr.slots} | {registered}"
+    detail: &"registered-thr : {registered}"
   )
   for idx in 0 .. 3:
     if registered[ idx ]:
       let start_t = now()
-      repeat_until thread_arr.slots[ idx ] == false:
-      #while thread_arr.slots[ idx ] == true:
+      #repeat_until thread_arr.slots[ idx ] == false:
+      while thread_arr.slots[ idx ] == true:
         discard
+
       #dbg &"<- {idx}-thread left synchronize after {now()-offset}"
       log[].send Rec(
         tics:   now() - appstart,
         who:    idx,
         where:  "rcu_synchronize",
-        what:   "left",
-        detail: &"after {now()-start_t}"
+        what:   "left inner-loop",
+        detail: &"after { now()-start_t }"
       )
   # eo for-loop idx
 
@@ -150,7 +147,7 @@ proc rcu_synchronize() =
     who:    rcu_id(),
     where:  "rcu_synchronize",
     what:   "exit",
-    detail: &"after {now()-start_t}"
+    detail: &"after { now()-start_t }"
   )
   # eo rcu-synchronize
 
@@ -169,7 +166,8 @@ proc rcu_synchronize() =
 ]#
 proc rcu_reclaim( old_int_ptr: ptr int) =
 
-  # stores a detached-pointer in the thread-local Set 'detached_ptrs' for later reclamation.
+  # stores a detached-pointer in the thread-local
+  # Set 'detached_ptrs' for later reclamation.
   #
   detached_ptrs.incl old_int_ptr
 
@@ -183,34 +181,25 @@ proc rcu_reclaim( old_int_ptr: ptr int) =
   )
   #
   # ?? if nondet(): return ?? unclear..
-  # TODO: some random condition
+  # TODO: maybe some random condition ?
   #
   rcu_synchronize()
 
-
   #while detached_ptrs.len > 0:
   repeat_until detached_ptrs.len == 0:
-
     let old_ptr = detached_ptrs.pop()
     #dbg &"thread-{rcu_info()} free pointer: { old_ptr.repr }"
+
     log[].send Rec(
       tics:   now() - appstart,
       who:    rcu_id(),
       where:  "rcu_reclaim",
       what:   "free pointer",
-      detail: &"{old_ptr.repr}"
+      detail: &"{ old_ptr.repr }"
     )
     #free[int]( detached.pop )
 
   # eo-while-loop
-
-  # log[].send Rec(
-  #   tics:   now() - appstart,
-  #   who:    rcu_id(),
-  #   where:  "rcu_reclaim",
-  #   what:   "exit",
-  #   detail: &"{old_ptr.repr}"
-  # )
 
 #[
 template critical_section*( code: untyped ) =
