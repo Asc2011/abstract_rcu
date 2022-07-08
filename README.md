@@ -7,11 +7,12 @@ received 2022-07 from [PDF online](https://software.imdea.org/~gotsman/papers/re
 
 
 `abstract_rcu.nim` is strictly a proof-of-concept and not intended for other purposes than exploring, testing and understanding the concept behind Read-Copy-Update and Hazard-Pointers. A formal proof of correctness is included in the above cited work.
-In Figure.2 the authors show the conceptual algorithm of RCU. This is covered in `src/abstract_rcu.nim`.
-[Figure.3](src/ds_rcu/counter.md) shows a Counter-type with RCU-memory-reclamation. `src/ds_rcu/counter.nim` tries to implement the counter. More concurrent data-structures might follow, if it turns out that Nim is a suitable workbench for such developments.
+In Figure.2 the authors show the conceptual algorithm of RCU. This is covered in `src/abstract_rcu.nim`.<br>
+[Figure.3](src/ds_rcu/counter.md) shows a Counter-type with RCU-memory-reclamation. `src/ds_rcu/counter.nim` tries to implement this counter. More lockfree data-structures will follow, if it turns out that Nim is a suitable workbench for such developments.
 
-Further information on RCU :
+More information on RCU and HP
   - [Wikipedia]( https://en.wikipedia.org/wiki/Read-copy-update) [ en.wikipedia.org/wiki/Read-copy-update ]
+  - [Wikipedia](https://en.wikipedia.org/wiki/Hazard_pointer) [ en.wikipedia.org/wiki/Hazard_pointer ]
   - McKenney, Walpole, 2007, _'What is RCU, fundamentally?'_, Linux Weekly News [ http://lwn.net/Articles/262464/ ]
 
 #### Figure.2, page-7

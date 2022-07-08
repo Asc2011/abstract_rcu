@@ -1,22 +1,24 @@
-import std / [ atomics, sets, strformat ]
+
+import std / [ sets, strformat ]
+import threading/atomics
 
 from util import dbg, Rec, now, repeat_until
 #[
   This is strictly a proof-of-concept and not intended for other purposes than
   exploring and understanding the concept behind Read-Copy-Update (RCU).
-  And understanding of Nim's memory semantics.
+  As well as understanding Nim's memory semantics.
   Consider the code-examples as experimental prototypes. Maybe over time it
   grows into a workbench for concurrent data-structures.
-  Try this [Userspace-RCU]( http://liburcu.org ) library for real purposes.
+  This lib [Userspace-RCU]( http://liburcu.org ) is for real purposes.
 ]#
 
 proc rcu_init*( ch: ptr Channel[util.Rec], start: int64 ) # receives a pointer to a log-channel and the starttime in ticks.
 
-proc rcu_register*()    # threads must register with RCU on thread-creation.
-proc rcu_unregister*()  # threads should unregister before thread destruction.
-proc rcu_enter*()       # marks the begin of a 'critical-section'.
-proc rcu_exit*()        # marks the end of a 'critical-section'.
-proc rcu_synchronize*() # synchronize with other threads. Starts of 'grace-period'.
+proc rcu_register*    # threads must register with RCU on thread-creation.
+proc rcu_unregister*  # threads should unregister before thread-destruction.
+proc rcu_enter*       # marks the begin of a 'critical-section'.
+proc rcu_exit*        # marks the end of a 'critical-section'.
+proc rcu_synchronize* # synchronize with other threads. Start of a 'grace-period'.
 
 proc rcu_reclaim*( old_int_ptr: ptr int ) # takes a detached pointer for later disposal.
 proc rcu_info*(): string # returns the threads-id and index in the thread-array.
@@ -26,7 +28,7 @@ proc os_thread_id(): int = getThreadId()
 # per-thread-Seq keeping detached-pointers around for deferred/later reclamation.
 # Needs initialization at the start of any worker-thread-function.
 #
-var detached_ptrs* {.threadvar.}: HashSet[ptr int]
+var rcu_detached_ptrs* {.threadvar.}: HashSet[ptr int]
 
 type TArray = object
   #
@@ -108,7 +110,7 @@ proc rcu_info: string =
   let slot = thread_arr.slot()
   result = &"os-id: { thread_arr.os_id[ slot ] }, slot: {slot}"
 
-proc rcu_synchronize() =
+proc rcu_synchronize =
   #
   # lockfree synchronization
   #
@@ -132,7 +134,6 @@ proc rcu_synchronize() =
       while thread_arr.slots[ idx ] == true:
         discard
 
-      #dbg &"<- {idx}-thread left synchronize after {now()-offset}"
       log[].send Rec(
         tics:   now() - appstart,
         who:    idx,
@@ -165,13 +166,12 @@ proc rcu_synchronize() =
   }
 ]#
 proc rcu_reclaim( old_int_ptr: ptr int) =
-
+  #
   # stores a detached-pointer in the thread-local
   # Set 'detached_ptrs' for later reclamation.
   #
-  detached_ptrs.incl old_int_ptr
+  rcu_detached_ptrs.incl old_int_ptr
 
-  #dbg &"thread-{rcu_info()} detached pointer: { old_int_ptr.repr }"
   log[].send Rec(
     tics:   now() - appstart,
     who:    rcu_id(),
@@ -186,9 +186,8 @@ proc rcu_reclaim( old_int_ptr: ptr int) =
   rcu_synchronize()
 
   #while detached_ptrs.len > 0:
-  repeat_until detached_ptrs.len == 0:
-    let old_ptr = detached_ptrs.pop()
-    #dbg &"thread-{rcu_info()} free pointer: { old_ptr.repr }"
+  repeat_until rcu_detached_ptrs.len == 0:
+    let old_ptr = rcu_detached_ptrs.pop()
 
     log[].send Rec(
       tics:   now() - appstart,
@@ -199,7 +198,7 @@ proc rcu_reclaim( old_int_ptr: ptr int) =
     )
     #free[int]( detached.pop )
 
-  # eo-while-loop
+  # eo-loop
 
 #[
 template critical_section*( code: untyped ) =
@@ -214,8 +213,13 @@ template critical_section*( code: untyped ) =
 
   finally:
     rcu_exit()
-
  ]#
 
-
+#[
+template thread_fn( fn: user_thread_proc() ) {.rcu.}
+  - init HashSet for detached-pointers
+  - call rcu_register()
+    - call user_thread_proc
+  - call rcu_unregister()
+]#
 
