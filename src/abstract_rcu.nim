@@ -12,7 +12,9 @@ from util import dbg, Rec, now, repeat_until
   This lib [Userspace-RCU]( http://liburcu.org ) is for real purposes.
 ]#
 
-proc rcu_init*( ch: ptr Channel[util.Rec], start: int64 ) # receives a pointer to a log-channel and the starttime in ticks.
+# receives a pointer to a log-channel and the starttime in ticks.
+#
+proc rcu_init*( ch: ptr Channel[util.Rec], start: int64 )
 
 proc rcu_register*    # threads must register with RCU on thread-creation.
 proc rcu_unregister*  # threads should unregister before thread-destruction.
