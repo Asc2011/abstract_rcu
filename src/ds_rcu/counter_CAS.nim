@@ -1,13 +1,15 @@
-import std / [ atomics, strformat  ]
-import abstract_rcu
+import threading/atomics
 
-from util import dbg, repeat_until
+#import std / [ strformat  ]
+#import ../abstract_rcu
+
+from ../util import Rec
 
 type
   Counter* = ref object
-    value: Atomic[ ptr int ]
-
-proc CAS(
+    value*: Atomic[ int ]
+#[
+proc CAS*(
   location: var Atomic[ptr int],
   expected: var ptr int,
   desired:  var ptr int
@@ -16,6 +18,30 @@ proc CAS(
 
 proc read*( counter: var Counter ): int =
   counter.value.load( moRelaxed )[]
+ ]#
+
+proc FetchAndAdd(
+  location: var Atomic[int],
+  value: int,
+) :int =
+  location.fetchAdd value
+
+proc FetchAndSub(
+  location: var Atomic[int],
+  value: int,
+) :int =
+  location.fetchSub value
+
+proc dec*( counter: Counter, toSub: int = 1 ): int =
+  return FetchAndSub( counter.value, toSub )
+
+proc inc*( counter: Counter, toAdd: int = 1 ): int =
+  return FetchAndAdd( counter.value, toAdd )
+
+proc reset*( counter: Counter ) =
+  var loc = counter.value
+  loc.store 0, SeqCst
+
 
 #[ Figure.3, page-7, right, Counter
 
@@ -35,6 +61,8 @@ proc read*( counter: var Counter ): int =
     return v;
   }
 ]#
+
+#[
 proc inc*( counter: var Counter ): int =
 
   var new_int_ptr = createShared( int, sizeof( int ) )
@@ -48,7 +76,7 @@ proc inc*( counter: var Counter ): int =
   new_int_ptr[] = old_int_ptr[] + 1
   #dbg &"new_int_ptr : { new_int_ptr.repr } | value = { new_int_ptr[] }"
 
-  
+
   repeat_until CAS( counter.value, old_int_ptr, new_int_ptr ):
     rcu_exit()
     rcu_enter()
@@ -63,3 +91,4 @@ proc inc*( counter: var Counter ): int =
   rcu_reclaim old_int_ptr  # might trigger a synchronize ?
 
   return counter.read()
+ ]#

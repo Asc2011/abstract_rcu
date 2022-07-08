@@ -2,14 +2,12 @@ static:
   echo """
     ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     +                                                          +
-    + This code is will frequently crash and sometimes finish. +
-    +                                                          +
-    + Retry often until it does.                               +
+    + This code shall not crash and always finish.             +
     +                                                          +
     + i used :                                                 +
     +                                                          +
-    + nim r -d:size --threads:on --gc:ORC test_dummy.nim       +
-    + nim r -d:size --threads:on --gc:ARC test_dummy.nim       +
+    + nim r -d:size --threads:on --gc:ORC test_counter_FAA.nim +
+    + nim r -d:size --threads:on --gc:ARC test_counter_FAA.nim +
     +                                                          +
     + runtime is ~750ms on my Intel-i5 from 2014.              +
     + prints out 50-60 entries to the output-table.            +
@@ -20,124 +18,82 @@ static:
 import std/[ algorithm, os, random, sets, strformat, strutils, #[, threadpool ]# ]
 randomize()
 
-import threading/channels # must use ARC|ORC now.
-#import fusion/pools
+import threading/channels
+import threading/atomics
 
 import terminaltables
-
-import abstract_rcu
 import util # dbg, Rec, now
+
+import ds_rcu/counter_FAA
 
 var
   appstart: int64       = now()      ## measured in monotimes.ticks
-  duration: int64       = 500 * 1000 ## 500 millies = 500_000 nanos
-  global_list: seq[int] = @[1,2,3]   ## data for worker-threads
+  duration: int64       = 350 * 1000 ## 500ms = 500_000 nanos
+  global_counter        = Counter()  ## data for worker-threads
   threads_work: bool    = on         ## thread-worker flag
-  thr_chan: Channel[ ptr seq[int] ]  ## sends ptr of global_list to worker-threads
+  thr_chan: Channel[ ptr Counter ]   ## sends ptr of global_counter to worker-threads
   log_chan: Channel[ Rec ]           ## logging channel
+  thread_nr: Atomic[int]
 
 thr_chan.open()
 log_chan.open()
 
-rcu_init log_chan.addr, appstart
 #
 #
 # Thread-Code workers
 #
 #
-proc thr_worker {.thread, gcsafe.} =
+proc thr_worker() {.thread.}  =
 
-  # waiting for the ptr to seq[int]
+  # waiting for the ptr to Counter
   #
-  var list_ptr = thr_chan.recv()
+  var counter_ptr = thr_chan.recv()
 
-  ## init thread-local Set[ptr int] for detached pointers
-  #
-  rcu_detached_ptrs = initHashSet[ ptr int ]()
-  rcu_register()          ## register thread with RCU
-  let rcu_slot = rcu_id() ## this threads rcu array-index 0..3
-
+  thread_nr.atomicInc()
+  let slot = thread_nr.load
 
   proc log( what: string, detail: string = "" ) =
     log_chan.send Rec(
       tics:   now() - appstart,
-      who:    rcu_slot,
+      who:    slot,
       where:  "thread-fn",
       what:   what,
       detail: detail
     )
 
-  proc random_pick: ptr int =
-    random.sample( list_ptr[] ).unsafeAddr
-  randomize()
-
-  var a_pointer: ptr int
-
-  # works
-  # {.cast(gcsafe).}:
-  #   dbg "global list ", global_list
-
   while threads_work:
 
-    a_pointer.reset
-    rcu_enter() ## 'critical-section' begins
-    let OP = random.sample @[ "push1", "push2", "push3", "noop", "delay" ]
+    let OP = random.sample @[ "inc", "dec", "inc 2", "dec 2", "read" ]
     case OP:
-      of "push1":
-        list_ptr[].add( random.rand 0..9 )
-        a_pointer = random_pick()
-        log OP, &"{list_ptr[]} detached : {a_pointer.repr}"
-      of "push2":
-        list_ptr[].add( random.rand 10..20 )
-        a_pointer = random_pick()
-        log OP, &"{list_ptr[]} detached : {a_pointer.repr}"
-      of "push3":
-        list_ptr[].add( random.rand 100..110 )
-        a_pointer = random_pick()
-        log OP, &"{list_ptr[]} detached : {a_pointer.repr}"
-      of "noop":
+      of "inc":
+        log OP, &"{ counter_ptr[].inc }"
+      of "dec":
+        log OP, &"{ counter_ptr[].dec }"
+      of "inc 2":
+        log OP, &"{ counter_ptr[].inc 2 }"
+      of "dec 2":
+        log OP, &"{ counter_ptr[].dec 2 }"
+      of "read":
+        log OP, &"{ counter_ptr[].value.load SeqCst }"
+      # of "reset":
+      #   counter_ptr[].reset()
+      #   log "0=reset", &"{counter_ptr[].repr}"
+      of "delay":
         cpuRelax()
-        log OP, &"{list_ptr[]}"
-      of "delay": # slow down, this should prolong 'grace-period'
-        sleep rand 0..1
-        log OP, &"{list_ptr[]}"
-      # of "pop":
-      # of "clear":
-      else: discard
-
-    rcu_exit() ## 'critical-section' ends
-
-    if OP.startsWith "push":
-      ## This disposes a pointer that points to e.g.
-      ## a deleted member of a data-structure, but
-      ## might be at-this-moment still
-      ## referenced by other thr-readers.
-      ## Passing it to rcu_reclaim( a_pointer )
-      ## will trigger a call to rcu_synchronize()
-      ## and thus guarantee, that all other thr-readers
-      ## have finished.
-      rcu_reclaim a_pointer
+        log OP, &"{counter_ptr[].value.load}"
+      else:
+        log "noop", &"{counter_ptr[].value.load}"
 
   # end-of while-loop
   #
-  if rcu_detached_ptrs.len > 0:
-    var garbage = newSeq[uint64]()
-    for p in rcu_detached_ptrs:
-      garbage.add cast[uint64]( p )
-    log "error", &"! not-freed : {garbage} !"
-  else:
-    log( "exit", &"{list_ptr[]} not freed: {rcu_detached_ptrs.len}" )
-
-  rcu_unregister() ## unregister thread
-#
+  log "exit", &"{counter_ptr[].value.load}"
 #
 # end-of Thread-Code workers
 #
-#
+
 
 #
 #  Main-Thread
-#
 #
 proc main =
 
@@ -148,19 +104,16 @@ proc main =
   msgs.add Rec(
     tics:    now() - appstart,
     who:     0,
-    where:   "test_dummy.nim",
+    where:   "test_counter_FAA.nim",
     what:    "init",
-    detail:  &"initial seq[int] : { global_list }"
+    detail:  &"initial Counter : { global_counter.value.load }"
   )
-
-  rcu_register() # register main-thread
 
   var ths: array[ 3, Thread[void] ]
 
   for i in 0 .. 2:
     createThread ths[i], thr_worker
-    thr_chan.send global_list.addr
-    #spawn thr_worker
+    thr_chan.send global_counter.addr
 
   let end_t = now() + duration
   #
@@ -181,7 +134,7 @@ proc main =
   )
 
   joinThreads ths
-  rcu_unregister()
+
 #
 #
 #  end-of Main-Thread
@@ -211,7 +164,7 @@ proc main =
     who:     0,
     where:   "main-fn",
     what:    "shutdown",
-    detail:  &"{global_list} {rcu_detached_ptrs.len}"
+    detail:  &"{global_counter[].repr}"
   )
 
   sort(msgs) do (x, y: Rec) -> int:
@@ -254,10 +207,10 @@ proc main =
 
   echo @[
       "The contents of this table are strictly 'not correct'. ",
-      "It must show garbled and distorted data to makes sense.",
       "The timings don't reflect the precise ordering of events.",
-      "There is no real memory-region 'freed', since no destructive-operations .pop() are performed on the seq[int].",
-      "This makes the code currently rather a showcase. "
+      "There is no real memory-region 'freed', since no ",
+      "destructive-operations performed on the global singleton Counter.",
+      "This code uses atomic FetchAndAdd-/FetchAndSub-calls."
   ].join "\n"
 
 
